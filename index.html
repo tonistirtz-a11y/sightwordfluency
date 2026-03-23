@@ -691,6 +691,7 @@ body::before {
           <button class="toggle-btn" data-level="level2" onclick="toggleLevel(this)">Level 2</button>
           <button class="toggle-btn" data-level="level3" onclick="toggleLevel(this)">Level 3</button>
           <button class="toggle-btn" data-level="level4" onclick="toggleLevel(this)">Level 4</button>
+          <button class="toggle-btn" data-level="custom" onclick="toggleLevel(this)">Custom</button>
         </div>
       </div>
       <div id="sublevelRow" style="display:none;margin-top:12px;">
@@ -699,6 +700,17 @@ body::before {
           <button class="toggle-btn active" data-sub="p2" onclick="toggleSublevel(this)">2-word</button>
           <button class="toggle-btn" data-sub="p3" onclick="toggleSublevel(this)">3-word</button>
           <button class="toggle-btn" data-sub="p4" onclick="toggleSublevel(this)">4-word</button>
+        </div>
+      </div>
+      <div id="customWordsSection" style="display:none;margin-top:12px;">
+        <div style="font-size:0.82rem;color:var(--gray);margin-bottom:8px;font-weight:600;">CUSTOM WORDS (comma or new-line separated)</div>
+        <textarea id="customWordsInput" class="form-input" style="width:100%;height:100px;resize:vertical;" placeholder="Enter custom words..." oninput="saveCustomWords(this.value)"></textarea>
+        <div style="display:flex;gap:10px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+          <select id="templateSelect" class="form-input" style="flex:1;min-width:150px;margin:0;padding:8px;" onchange="loadTemplate(this.value)">
+            <option value="">-- Load Saved Template --</option>
+          </select>
+          <button class="btn btn-secondary" style="padding:8px 12px;font-size:0.85rem;" onclick="saveCurrentAsTemplate()">💾 Save Template</button>
+          <button class="btn btn-secondary" style="padding:8px 12px;font-size:0.85rem;color:var(--coral);border-color:var(--coral);" onclick="deleteTemplate()">🗑️ Delete</button>
         </div>
       </div>
       <div class="clinical-note" style="margin-top:12px;">💡 Progress students from 2-word → 3-word → sentences when they hit aim for 3 sessions in a row.</div>
@@ -1180,7 +1192,7 @@ function selectProfile(name) {
   if (state.currentProfile.settings) {
     state.settings = {...state.currentProfile.settings};
     // Migrate old level keys to new system if needed
-    if (!state.settings.level || !state.settings.level.startsWith('level')) {
+    if (!state.settings.level || (!state.settings.level.startsWith('level') && state.settings.level !== 'custom')) {
       state.settings.level = 'level1';
     }
     if (!state.settings.sublevel || !['p2','p3','p4'].includes(state.settings.sublevel)) {
@@ -1188,6 +1200,10 @@ function selectProfile(name) {
     }
     syncSettingsUI();
   }
+  if (document.getElementById('customWordsInput')) {
+    document.getElementById('customWordsInput').value = state.currentProfile.customWords || '';
+  }
+  updateTemplateDropdown();
   document.getElementById('activityStudentName').textContent = name+' — What are we working on today?';
   state.fromActivity = true;
   showScreen('activityScreen');
@@ -1227,8 +1243,10 @@ function toggleSublevel(btn) {
 }
 
 function updateSublevelVisibility() {
-  // All levels have p2/p3/p4 sublevels — always show the sublevel row
-  document.getElementById('sublevelRow').style.display = 'block';
+  const isCustom = state.settings.level === 'custom';
+  document.getElementById('sublevelRow').style.display = isCustom ? 'none' : 'block';
+  const customSection = document.getElementById('customWordsSection');
+  if (customSection) customSection.style.display = isCustom ? 'block' : 'none';
 }
 
 function setAim(btn) {
@@ -1242,12 +1260,84 @@ function updateAimDisplay() {
   // legacy — no longer needed but kept to avoid errors
 }
 
+// ===== CUSTOM WORDS & TEMPLATES =====
+function saveCustomWords(val) {
+  if (!state.currentProfile) return;
+  state.currentProfile.customWords = val;
+  saveProfile(state.currentProfile);
+}
+
+function saveCurrentAsTemplate() {
+  if (!state.currentProfile) return;
+  const text = document.getElementById('customWordsInput').value.trim();
+  if (!text) { alert('Please enter some words first.'); return; }
+  const name = prompt('Enter a name for this template:');
+  if (!name) return;
+  
+  state.currentProfile.templates = state.currentProfile.templates || [];
+  const existingIdx = state.currentProfile.templates.findIndex(t => t.name === name);
+  if (existingIdx >= 0) {
+    state.currentProfile.templates[existingIdx].rawText = text;
+  } else {
+    state.currentProfile.templates.push({ name, rawText: text });
+  }
+  saveProfile(state.currentProfile);
+  updateTemplateDropdown();
+  document.getElementById('templateSelect').value = name;
+  alert('Template saved!');
+}
+
+function loadTemplate(templateName) {
+  if (!templateName || !state.currentProfile || !state.currentProfile.templates) return;
+  const t = state.currentProfile.templates.find(x => x.name === templateName);
+  if (t) {
+    document.getElementById('customWordsInput').value = t.rawText;
+    saveCustomWords(t.rawText);
+  }
+}
+
+function deleteTemplate() {
+  const select = document.getElementById('templateSelect');
+  const templateName = select.value;
+  if (!templateName || !state.currentProfile) {
+    alert('Please select a template to delete.');
+    return;
+  }
+  if (confirm(`Delete template "${templateName}"?`)) {
+    state.currentProfile.templates = state.currentProfile.templates.filter(t => t.name !== templateName);
+    saveProfile(state.currentProfile);
+    updateTemplateDropdown();
+    select.value = '';
+    document.getElementById('customWordsInput').value = '';
+    saveCustomWords('');
+  }
+}
+
+function updateTemplateDropdown() {
+  const select = document.getElementById('templateSelect');
+  if (!select) return;
+  select.innerHTML = '<option value="">-- Load Saved Template --</option>';
+  if (!state.currentProfile || !state.currentProfile.templates) return;
+  state.currentProfile.templates.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.name;
+    opt.textContent = t.name;
+    select.appendChild(opt);
+  });
+}
+
 // ===== WORD LIST BUILDER =====
 function buildWordList() {
   const { level, sublevel } = state.settings;
 
-  // Use the sublevel (p2, p3, or p4) to pick the phrase list for the level
-  let pool = [...(WORD_BANK[level]?.[sublevel] || [])];
+  let pool = [];
+  if (level === 'custom') {
+    const text = state.currentProfile?.customWords || '';
+    pool = text.split(/[\n,]+/).map(w => w.trim()).filter(w => w.length > 0);
+  } else {
+    // Use the sublevel (p2, p3, or p4) to pick the phrase list for the level
+    pool = [...(WORD_BANK[level]?.[sublevel] || [])];
+  }
 
   // Shuffle the pool for practice
   for (let i = pool.length - 1; i > 0; i--) {
